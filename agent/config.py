@@ -20,6 +20,8 @@ class Settings:
     llm_api_key: str = _get("LLM_API_KEY", "local")
     llm_temperature: float = float(_get("LLM_TEMPERATURE", "0.4"))
     llm_max_tokens: int = int(_get("LLM_MAX_TOKENS", "200"))
+    # Must match --parallel in scripts/start_llm.ps1: one warm-up request per slot.
+    llm_slots: int = int(_get("LLM_SLOTS", "4"))
 
     stt_model: str = _get("STT_MODEL", "nemo-parakeet-tdt-0.6b-v2")
     stt_quantization: str = _get("STT_QUANTIZATION", "int8")

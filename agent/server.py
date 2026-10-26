@@ -23,6 +23,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 from agent.bot import run_bot
 from agent.config import settings
 from agent.models import preload
+from agent.warmup import warm_llm_cache
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -38,8 +39,9 @@ async def lifespan(app: FastAPI):
         async with httpx.AsyncClient(timeout=3) as client:
             r = await client.get(f"{settings.llm_base_url}/models")
             logger.info(f"LLM server reachable at {settings.llm_base_url}: {r.status_code}")
+        await warm_llm_cache()
     except Exception as e:
-        logger.warning(f"LLM server NOT reachable at {settings.llm_base_url} ({e}). Start it first.")
+        logger.warning(f"LLM server not ready at {settings.llm_base_url} ({e!r}). Start it first.")
     logger.info(f"Ready: open http://{settings.host}:{settings.port} in Chrome or Edge")
     yield
     await webrtc_handler.close()

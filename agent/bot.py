@@ -51,6 +51,23 @@ def make_tts() -> CachedKokoroTTSService:
     )
 
 
+def make_llm() -> OpenAILLMService:
+    return OpenAILLMService(
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url,
+        settings=OpenAILLMService.Settings(
+            model=settings.llm_model,
+            system_instruction=build_system_prompt(),
+            temperature=settings.llm_temperature,
+            max_tokens=settings.llm_max_tokens,
+        ),
+    )
+
+
+def make_context() -> LLMContext:
+    return LLMContext(tools=[book_test_drive])
+
+
 async def run_bot(connection: SmallWebRTCConnection):
     session_id = connection.pc_id
     logger.info(f"[{session_id}] starting session")
@@ -62,20 +79,9 @@ async def run_bot(connection: SmallWebRTCConnection):
 
     stt = ParakeetSTTService()
 
-    llm = OpenAILLMService(
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_base_url,
-        settings=OpenAILLMService.Settings(
-            model=settings.llm_model,
-            system_instruction=build_system_prompt(),
-            temperature=settings.llm_temperature,
-            max_tokens=settings.llm_max_tokens,
-        ),
-    )
-
+    llm = make_llm()
     tts = make_tts()
-
-    context = LLMContext(tools=[book_test_drive])
+    context = make_context()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(

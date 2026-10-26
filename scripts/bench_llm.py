@@ -89,6 +89,12 @@ async def main():
         print(f"cold (first request, prompt not cached): TTFT {cold['ttft_ms']:.0f} ms")
         print(f"  reply: {cold['text']!r}\n")
 
+        # llama.cpp caches per slot; fill every slot once (the agent does the
+        # same at startup) so the table shows steady-state latency.
+        await asyncio.gather(
+            *(one_request(client, args.url, args.model, QUESTIONS[0]) for _ in range(settings.llm_slots))
+        )
+
         print(f"{'parallel':>8} {'TTFT p50':>10} {'TTFT max':>10} {'tok/s each':>11}")
         for n in (1, 2, 4):
             results = []

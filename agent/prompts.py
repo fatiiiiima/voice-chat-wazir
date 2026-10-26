@@ -12,8 +12,8 @@ DUBAI = timezone(timedelta(hours=4), "GST")
 
 
 def build_system_prompt(now: datetime | None = None) -> str:
-    # Keep everything that changes per session (like the date) at the END of the
-    # prompt, so the LLM server can reuse its cache for the long fixed part.
+    # The LLM server caches this prompt and reuses it for every call, so it must
+    # stay identical between calls: date only (no clock time), and at the end.
     now = now or datetime.now(DUBAI)
     return f"""You are Wazir, a friendly female sales assistant for AGMC, a used car dealership in the UAE. You are talking to a customer by voice on the AGMC website.
 
@@ -37,7 +37,7 @@ What you must not do:
 Current inventory:
 {inventory_for_prompt()}
 
-Today is {now:%A %d %B %Y}, and the time in Dubai is {now:%H:%M}. Convert relative dates like "tomorrow at five" into an explicit date and time."""
+Today is {now:%A %d %B %Y} (Dubai time). Convert relative dates like "tomorrow at five" into an explicit date and time."""
 
 
 GREETING = "Hi, I'm Wazir from AGMC. Are you looking for a car today, or would you like to book a test drive?"
