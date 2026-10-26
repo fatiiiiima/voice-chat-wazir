@@ -7,3 +7,4 @@ logs/*
 models/
 tools/
 .pytest_cache/
+*.zip
