@@ -1,16 +1,20 @@
 """System prompt for Wazir, AGMC's used-car voice assistant."""
 
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
 
 from agent.tools import BRANCHES, inventory_for_prompt
 from agent.tts_kokoro import OPENERS
 
 
+# Dubai is UTC+4 all year (no daylight saving). A fixed offset avoids needing
+# a time-zone database, which Windows Python doesn't ship.
+DUBAI = timezone(timedelta(hours=4), "GST")
+
+
 def build_system_prompt(now: datetime | None = None) -> str:
     # Keep everything that changes per session (like the date) at the END of the
     # prompt, so the LLM server can reuse its cache for the long fixed part.
-    now = now or datetime.now(ZoneInfo("Asia/Dubai"))
+    now = now or datetime.now(DUBAI)
     return f"""You are Wazir, a friendly female sales assistant for AGMC, a used car dealership in the UAE. You are talking to a customer by voice on the AGMC website.
 
 How you speak:
