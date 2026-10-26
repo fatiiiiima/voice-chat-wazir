@@ -56,7 +56,7 @@
         <tbody id="rows"></tbody>
       </table>
     </div>
-    <p class="hint">"Heard" is measured in this browser: from when your mic went quiet to when Wazir's audio started playing. It is the number the user actually experiences.</p>
+    <p class="hint">"Heard" = server total + this browser's playback delay + half the network round trip: the delay the customer actually experiences.</p>
   </div>
 </main>
 
@@ -85,43 +85,55 @@ function addTurnRow(t) {
   lastTurn = t.turn;
 }
 
-// ---- Browser-side latency: mic goes quiet -> remote audio starts ----------
-let lastTurn = null, lastLocalVoice = 0, userSpoke = false, remoteSilentSince = performance.now(), remoteLoud = false;
+// ---- Browser-side latency ------------------------------------------------
+// heard = server total (end of speech -> audio sent)
+//       + playout delay measured here (turn message received -> audio audible)
+//       + half the network round trip (your voice reaching the server)
+// This avoids guessing from mic levels, which background noise throws off.
+let lastTurn = null, pendingTurn = null, lastRemoteOnset = -1e9, rttMs = 0;
+let remoteSilentSince = performance.now(), remoteLoud = false, statsTimer;
 function rms(analyser, buf) {
   analyser.getFloatTimeDomainData(buf);
   let s = 0; for (let i = 0; i < buf.length; i++) s += buf[i] * buf[i];
   return Math.sqrt(s / buf.length);
 }
 function startMeters(remoteStream) {
-  const local = audioCtx.createAnalyser(); local.fftSize = 512;
-  audioCtx.createMediaStreamSource(micStream).connect(local);
   const remote = audioCtx.createAnalyser(); remote.fftSize = 512;
   audioCtx.createMediaStreamSource(remoteStream).connect(remote);
-  const lb = new Float32Array(local.fftSize), rb = new Float32Array(remote.fftSize);
+  const rb = new Float32Array(remote.fftSize);
   meterTimer = setInterval(() => {
     const now = performance.now();
-    const l = rms(local, lb), r = rms(remote, rb);
-    if (l > 0.02 && !remoteLoud) { lastLocalVoice = now; userSpoke = true; }
-    if (r > 0.01) {
-      if (!remoteLoud && now - remoteSilentSince > 300 && userSpoke) {
-        const ms = Math.round(now - lastLocalVoice);
-        if (ms > 0 && ms < 10000) reportHeard(ms);
-        userSpoke = false;
-      }
+    if (rms(remote, rb) > 0.01) {
+      if (!remoteLoud && now - remoteSilentSince > 300) { lastRemoteOnset = now; tryResolveHeard(); }
       remoteLoud = true;
     } else {
       if (remoteLoud) remoteSilentSince = now;
       remoteLoud = false;
     }
-  }, 10);
+  }, 5);
+  statsTimer = setInterval(async () => {
+    if (!pc) return;
+    (await pc.getStats()).forEach((r) => {
+      if (r.type === "candidate-pair" && r.nominated && r.currentRoundTripTime != null) rttMs = r.currentRoundTripTime * 1000;
+    });
+  }, 2000);
 }
-function reportHeard(ms) {
-  if (dc && dc.readyState === "open") dc.send(JSON.stringify({ type: "client-latency", ms }));
-  // The server's turn row usually arrives just before the audio does.
-  setTimeout(() => {
-    const tr = rowsByTurn.get(lastTurn);
-    if (tr) { const td = tr.querySelector(".heard"); td.textContent = ms; td.className = "total heard " + cls(ms); }
-  }, 150);
+function onTurnTiming(t) {
+  addTurnRow(t);
+  if (t.total_ms == null) return;
+  pendingTurn = { turn: t.turn, total: t.total_ms, arrived: performance.now() };
+  tryResolveHeard();
+  setTimeout(() => { if (pendingTurn && pendingTurn.turn === t.turn) pendingTurn = null; }, 3000);
+}
+function tryResolveHeard() {
+  if (!pendingTurn) return;
+  const playout = lastRemoteOnset - pendingTurn.arrived;
+  if (playout < -300 || playout > 3000) return;   // onset belongs to another reply
+  const ms = Math.round(pendingTurn.total + Math.max(0, playout) + rttMs / 2);
+  const tr = rowsByTurn.get(pendingTurn.turn);
+  if (tr) { const td = tr.querySelector(".heard"); td.textContent = ms; td.className = "total heard " + cls(ms); }
+  if (dc && dc.readyState === "open") dc.send(JSON.stringify({ type: "client-latency", turn: pendingTurn.turn, ms }));
+  pendingTurn = null;
 }
 
 // ---- Data channel messages from the agent --------------------------------
@@ -134,7 +146,7 @@ function onMessage(ev) {
       if (!botMsgEl) botMsgEl = addMsg("bot", "");
       botMsgEl.textContent = (botMsgEl.textContent + " " + m.text).trim();
       setStatus("Wazir is speaking", "bot"); break;
-    case "wazir-turn": addTurnRow(m); break;
+    case "wazir-turn": onTurnTiming(m); break;
     case "wazir-barge-in": botMsgEl = null; addMsg("sys", "— you interrupted —"); break;
   }
 }
@@ -181,7 +193,7 @@ async function start() {
 }
 
 function stop() {
-  clearInterval(pingTimer); clearInterval(meterTimer);
+  clearInterval(pingTimer); clearInterval(meterTimer); clearInterval(statsTimer);
   if (pc) { pc.close(); pc = null; }
   if (micStream) micStream.getTracks().forEach((t) => t.stop());
   if (audioCtx) audioCtx.close();

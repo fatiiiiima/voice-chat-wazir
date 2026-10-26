@@ -61,6 +61,7 @@ class TurnTimingObserver(BaseObserver):
         self._bot_speaking = False
         self._last_logged_turn: int | None = None
         self._last_bot_started: float | None = None
+        self._last_barge_in = 0.0
         self._seen: set[int] = set()
 
     @staticmethod
@@ -133,6 +134,8 @@ class TurnTimingObserver(BaseObserver):
         elif isinstance(frame, LLMTextFrame):
             if t.get("llm_start"):
                 t.setdefault("llm_first_token", now)
+                if len(t.setdefault("reply", "")) < 80:
+                    t["reply"] += frame.text
 
         elif isinstance(frame, FunctionCallInProgressFrame):
             t["tool"] = frame.function_name
@@ -156,7 +159,10 @@ class TurnTimingObserver(BaseObserver):
             self._bot_speaking = False
 
         elif isinstance(frame, InterruptionFrame):
-            if self._bot_speaking and self._last_logged_turn is not None:
+            # One interruption is broadcast as two frames (upstream + downstream).
+            recent = now - self._last_barge_in < 0.5
+            if self._bot_speaking and self._last_logged_turn is not None and not recent:
+                self._last_barge_in = now
                 self._write(
                     {
                         "event": "barge_in",
@@ -186,6 +192,8 @@ class TurnTimingObserver(BaseObserver):
             # Informational: STT and the Smart-Turn model both run inside turn_detect_ms.
             "stt_ms": _ms(t.get("vad_stop"), t.get("stt_final")),
             "smart_turn_ms": t.get("smart_turn_ms"),
+            # Start of the reply: a short opener ("Sure! ...") means fast first audio.
+            "reply_start": (t.get("reply") or "").strip()[:80],
             "tool": t.get("tool"),
             "tool_wait_ms": _ms(t.get("tool_start"), t.get("llm_first_token")) if t.get("tool") else None,
         }
@@ -201,11 +209,10 @@ class TurnTimingObserver(BaseObserver):
         )
         self._turn = self._new_turn()
 
-    def add_client_latency(self, client_ms: float):
-        """Latency measured in the browser: mic goes quiet -> agent audio heard."""
-        self._write(
-            {"event": "client_latency", "turn": self._last_logged_turn, "client_ms": round(client_ms)}
-        )
+    def add_client_latency(self, client_ms: float, turn: int | None = None):
+        """Latency as heard in the browser (server total + playout + network)."""
+        turn = turn if turn is not None else self._last_logged_turn
+        self._write({"event": "client_latency", "turn": turn, "client_ms": round(client_ms)})
 
     def _write(self, record: dict[str, Any]):
         record = {

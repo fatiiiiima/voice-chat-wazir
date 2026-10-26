@@ -80,6 +80,7 @@ async def test_greeting_is_not_logged_and_barge_in_is(tmp_path, monkeypatch):
     # User interrupts while bot is talking.
     await push(obs, VADUserStartedSpeakingFrame(), 6.6, monkeypatch)
     await push(obs, InterruptionFrame(), 6.6, monkeypatch)
+    await push(obs, InterruptionFrame(), 6.601, monkeypatch)  # same interruption, other direction
 
     turn, barge = records(tmp_path)
     assert turn["event"] == "turn" and turn["total_ms"] == 600

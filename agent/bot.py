@@ -132,7 +132,7 @@ async def run_bot(connection: SmallWebRTCConnection):
     @transport.event_handler("on_app_message")
     async def on_app_message(transport, message, sender):
         if isinstance(message, dict) and message.get("type") == "client-latency":
-            timing.add_client_latency(float(message.get("ms", 0)))
+            timing.add_client_latency(float(message.get("ms", 0)), message.get("turn"))
 
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(worker)
