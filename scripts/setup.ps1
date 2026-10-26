@@ -23,9 +23,21 @@ python -m uv sync --python 3.12
 Write-Host "== 3/4 Downloading llama.cpp (Vulkan build, runs the LLM on the Intel Arc GPU) ==" -ForegroundColor Cyan
 $llamaDir = "tools\llama.cpp"
 if (-not (Test-Path "$llamaDir\llama-server.exe")) {
-    $release = Invoke-RestMethod "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
-    $asset = $release.assets | Where-Object { $_.name -match "bin-win-vulkan-x64\.zip$" } | Select-Object -First 1
-    if (-not $asset) { throw "Could not find a Windows Vulkan build in llama.cpp release $($release.tag_name)" }
+    # Asset names change between llama.cpp versions, so match loosely and look
+    # back through recent releases for a Windows x64 Vulkan zip.
+    $releases = Invoke-RestMethod "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=15"
+    $asset = $null
+    foreach ($rel in $releases) {
+        $asset = $rel.assets | Where-Object {
+            $_.name -match "\.zip$" -and $_.name -match "vulkan" -and $_.name -match "win" -and $_.name -match "x64|amd64"
+        } | Select-Object -First 1
+        if ($asset) { Write-Host "Using llama.cpp $($rel.tag_name): $($asset.name)"; break }
+    }
+    if (-not $asset) {
+        Write-Host "Files in the latest llama.cpp release ($($releases[0].tag_name)):" -ForegroundColor Yellow
+        $releases[0].assets | ForEach-Object { Write-Host "  $($_.name)" }
+        throw "No Windows Vulkan build found. Send the list above to the developer, or download a Windows Vulkan zip from https://github.com/ggml-org/llama.cpp/releases and unzip it into tools\llama.cpp"
+    }
     New-Item -ItemType Directory -Force -Path $llamaDir | Out-Null
     $zip = "$llamaDir\llama.zip"
     Write-Host "Downloading $($asset.name)..."
@@ -34,6 +46,7 @@ if (-not (Test-Path "$llamaDir\llama-server.exe")) {
     Remove-Item $zip
     # Some releases nest files in a subfolder
     $exe = Get-ChildItem $llamaDir -Recurse -Filter llama-server.exe | Select-Object -First 1
+    if (-not $exe) { throw "llama-server.exe not found in $($asset.name)" }
     if ($exe.DirectoryName -ne (Resolve-Path $llamaDir).Path) {
         Get-ChildItem $exe.DirectoryName | Move-Item -Destination $llamaDir -Force
     }
