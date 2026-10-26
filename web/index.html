@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AGMC – Talk to Wazir</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --ink:#1b1f24; --muted:#6b7280; --accent:#0a5cff; --ok:#16a34a; --warn:#d97706; --bad:#dc2626; --line:#e5e7eb; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width: 760px; margin: 32px auto; padding: 0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; margin-bottom:16px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 16px; }
+  .row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  button { font:inherit; font-weight:600; border:0; border-radius:999px; padding:12px 22px; cursor:pointer; background:var(--accent); color:#fff; }
+  button.stop { background:var(--bad); }
+  button:disabled { opacity:.5; cursor:default; }
+  .status { display:flex; align-items:center; gap:8px; color:var(--muted); }
+  .dot { width:10px; height:10px; border-radius:50%; background:#cbd5e1; }
+  .dot.live { background:var(--ok); } .dot.user { background:var(--accent); } .dot.bot { background:var(--warn); }
+  #log { max-height: 320px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; }
+  .msg { padding:8px 12px; border-radius:12px; max-width:85%; }
+  .msg.user { align-self:flex-end; background:#e8efff; }
+  .msg.bot { align-self:flex-start; background:#f1f2f4; }
+  .msg.sys { align-self:center; color:var(--muted); font-size:13px; }
+  table { width:100%; border-collapse:collapse; font-variant-numeric: tabular-nums; font-size:13px; }
+  th, td { text-align:right; padding:6px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th:first-child, td:first-child { text-align:left; }
+  td.total { font-weight:700; }
+  .good { color:var(--ok); } .meh { color:var(--warn); } .bad { color:var(--bad); }
+  .tablewrap { overflow-x:auto; }
+  .hint { color:var(--muted); font-size:13px; margin-top:8px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1>AGMC · Talk to Wazir</h1>
+    <p class="sub">Ask about our used cars or book a test drive. Use headphones for the cleanest barge-in testing.</p>
+    <div class="row">
+      <button id="btn">Start talking</button>
+      <div class="status"><span id="dot" class="dot"></span><span id="status">Not connected</span></div>
+    </div>
+  </div>
+
+  <div class="card"><div id="log"></div></div>
+
+  <div class="card">
+    <strong>Latency per turn (ms, from end of your speech)</strong>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>#</th><th>VAD</th><th>Turn+STT</th><th>(STT)</th><th>LLM 1st tok</th><th>TTS 1st audio</th><th>Out</th><th>Server total</th><th>Heard (browser)</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <p class="hint">"Heard" is measured in this browser: from when your mic went quiet to when Wazir's audio started playing. It is the number the user actually experiences.</p>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let pc, dc, micStream, audioCtx, pingTimer, meterTimer, botMsgEl = null;
+const rowsByTurn = new Map();
+
+function setStatus(text, cls) { $("status").textContent = text; $("dot").className = "dot " + (cls || ""); }
+function addMsg(kind, text) {
+  const el = document.createElement("div");
+  el.className = "msg " + kind; el.textContent = text;
+  $("log").appendChild(el); $("log").scrollTop = $("log").scrollHeight;
+  return el;
+}
+function cls(ms) { return ms == null ? "" : ms < 800 ? "good" : ms < 1000 ? "meh" : "bad"; }
+function fmt(v) { return v == null ? "–" : v; }
+
+function addTurnRow(t) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td>${t.turn}${t.tool ? " 🔧" : ""}</td><td>${fmt(t.vad_ms)}</td><td>${fmt(t.turn_detect_ms)}</td>
+    <td>${fmt(t.stt_ms)}</td><td>${fmt(t.llm_ttft_ms)}</td><td>${fmt(t.tts_first_audio_ms)}</td><td>${fmt(t.transport_ms)}</td>
+    <td class="total ${cls(t.total_ms)}">${fmt(t.total_ms)}</td><td class="total heard">–</td>`;
+  $("rows").prepend(tr);
+  rowsByTurn.set(t.turn, tr);
+  lastTurn = t.turn;
+}
+
+// ---- Browser-side latency: mic goes quiet -> remote audio starts ----------
+let lastTurn = null, lastLocalVoice = 0, userSpoke = false, remoteSilentSince = performance.now(), remoteLoud = false;
+function rms(analyser, buf) {
+  analyser.getFloatTimeDomainData(buf);
+  let s = 0; for (let i = 0; i < buf.length; i++) s += buf[i] * buf[i];
+  return Math.sqrt(s / buf.length);
+}
+function startMeters(remoteStream) {
+  const local = audioCtx.createAnalyser(); local.fftSize = 512;
+  audioCtx.createMediaStreamSource(micStream).connect(local);
+  const remote = audioCtx.createAnalyser(); remote.fftSize = 512;
+  audioCtx.createMediaStreamSource(remoteStream).connect(remote);
+  const lb = new Float32Array(local.fftSize), rb = new Float32Array(remote.fftSize);
+  meterTimer = setInterval(() => {
+    const now = performance.now();
+    const l = rms(local, lb), r = rms(remote, rb);
+    if (l > 0.02 && !remoteLoud) { lastLocalVoice = now; userSpoke = true; }
+    if (r > 0.01) {
+      if (!remoteLoud && now - remoteSilentSince > 300 && userSpoke) {
+        const ms = Math.round(now - lastLocalVoice);
+        if (ms > 0 && ms < 10000) reportHeard(ms);
+        userSpoke = false;
+      }
+      remoteLoud = true;
+    } else {
+      if (remoteLoud) remoteSilentSince = now;
+      remoteLoud = false;
+    }
+  }, 10);
+}
+function reportHeard(ms) {
+  if (dc && dc.readyState === "open") dc.send(JSON.stringify({ type: "client-latency", ms }));
+  // The server's turn row usually arrives just before the audio does.
+  setTimeout(() => {
+    const tr = rowsByTurn.get(lastTurn);
+    if (tr) { const td = tr.querySelector(".heard"); td.textContent = ms; td.className = "total heard " + cls(ms); }
+  }, 150);
+}
+
+// ---- Data channel messages from the agent --------------------------------
+function onMessage(ev) {
+  if (typeof ev.data !== "string" || ev.data.startsWith("pong")) return;
+  let m; try { m = JSON.parse(ev.data); } catch { return; }
+  switch (m.type) {
+    case "wazir-user": botMsgEl = null; addMsg("user", m.text); setStatus("Thinking…", "user"); break;
+    case "wazir-bot":
+      if (!botMsgEl) botMsgEl = addMsg("bot", "");
+      botMsgEl.textContent = (botMsgEl.textContent + " " + m.text).trim();
+      setStatus("Wazir is speaking", "bot"); break;
+    case "wazir-turn": addTurnRow(m); break;
+    case "wazir-barge-in": botMsgEl = null; addMsg("sys", "— you interrupted —"); break;
+  }
+}
+
+// ---- Connect / disconnect -------------------------------------------------
+async function start() {
+  $("btn").disabled = true; setStatus("Connecting…");
+  micStream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+  });
+  audioCtx = new AudioContext();
+
+  pc = new RTCPeerConnection();
+  pc.addTransceiver(micStream.getAudioTracks()[0], { direction: "sendrecv" });
+  pc.addTransceiver("video", { direction: "sendrecv" });   // the server expects audio + video slots
+  dc = pc.createDataChannel("chat", { ordered: true });
+  dc.onopen = () => { pingTimer = setInterval(() => dc.readyState === "open" && dc.send("ping: " + Date.now()), 1000); };
+  dc.onmessage = onMessage;
+
+  pc.ontrack = (ev) => {
+    if (ev.track.kind !== "audio") return;
+    const stream = new MediaStream([ev.track]);
+    const audio = new Audio(); audio.autoplay = true; audio.srcObject = stream;
+    startMeters(stream);
+  };
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === "connected") { setStatus("Live — just talk", "live"); $("btn").disabled = false; }
+    if (["failed", "closed", "disconnected"].includes(pc.connectionState)) stop();
+  };
+
+  await pc.setLocalDescription(await pc.createOffer());
+  await new Promise((resolve) => {   // send one complete offer instead of trickling ICE
+    if (pc.iceGatheringState === "complete") return resolve();
+    pc.addEventListener("icegatheringstatechange", () => pc.iceGatheringState === "complete" && resolve());
+    setTimeout(resolve, 2000);
+  });
+  const res = await fetch("/api/offer", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+  });
+  if (!res.ok) throw new Error("offer failed: " + res.status);
+  await pc.setRemoteDescription(await res.json());
+  $("btn").textContent = "Hang up"; $("btn").classList.add("stop");
+}
+
+function stop() {
+  clearInterval(pingTimer); clearInterval(meterTimer);
+  if (pc) { pc.close(); pc = null; }
+  if (micStream) micStream.getTracks().forEach((t) => t.stop());
+  if (audioCtx) audioCtx.close();
+  $("btn").textContent = "Start talking"; $("btn").classList.remove("stop"); $("btn").disabled = false;
+  setStatus("Not connected");
+}
+
+$("btn").onclick = () => (pc ? stop() : start().catch((e) => { console.error(e); stop(); setStatus("Error: " + e.message, ""); }));
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+logs/*
+!logs/.gitkeep
+models/
+tools/
+.pytest_cache/

@@ -1,0 +1,25 @@
+[project]
+name = "wazir-voice-agent"
+version = "0.1.0"
+description = "AGMC local voice agent (Wazir): streaming STT -> local LLM -> streaming TTS over WebRTC"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "pipecat-ai[webrtc,silero,local-smart-turn,kokoro,openai]==1.14.0",
+    "onnx-asr[cpu,hub]>=0.12.0",
+    "fastapi>=0.115.6",
+    "uvicorn>=0.32.0",
+    "python-dotenv>=1.0.0",
+    "loguru>=0.7.0",
+    "numpy>=1.26",
+    "httpx>=0.27",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

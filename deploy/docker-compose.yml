@@ -1,0 +1,41 @@
+# For the Linux + NVIDIA GPU server LATER. Not used on the Windows laptop, and not
+# yet tested on GPU hardware. Needs Docker + NVIDIA Container Toolkit.
+#
+#   docker compose -f deploy/docker-compose.yml up --build
+#
+# Same agent code; only the LLM backend changes (llama.cpp -> vLLM).
+services:
+  llm:
+    image: vllm/vllm-openai:latest   # pin a tested version before production
+    command: >
+      --model Qwen/Qwen3-4B-Instruct-2507
+      --served-model-name qwen3-4b-instruct
+      --enable-prefix-caching
+      --enable-auto-tool-choice --tool-call-parser hermes
+      --max-model-len 8192
+      --gpu-memory-utilization 0.85
+    ports: ["8000:8000"]
+    volumes: ["hf-cache:/root/.cache/huggingface"]
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/models"]
+      interval: 10s
+      retries: 60
+
+  agent:
+    build: ..
+    # WebRTC media uses random UDP ports; host networking avoids mapping them.
+    network_mode: host
+    environment:
+      LLM_BASE_URL: http://127.0.0.1:8000/v1
+      LLM_MODEL: qwen3-4b-instruct
+    volumes: ["../logs:/app/logs"]
+    depends_on:
+      llm: { condition: service_healthy }
+
+volumes:
+  hf-cache:
