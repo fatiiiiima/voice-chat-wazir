@@ -4,11 +4,10 @@ $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
 Write-Host "== 1/4 Checking Python ==" -ForegroundColor Cyan
-$pyver = (python -c "import sys; print('%d.%d' % sys.version_info[:2])")
-if ([version]$pyver -lt [version]"3.11" -or [version]$pyver -ge [version]"3.14") {
-    throw "Python 3.11-3.13 required, found $pyver. Install 3.12 from python.org."
-}
-Write-Host "Python $pyver OK"
+# Any installed Python can run uv. uv then downloads its own Python 3.12 for the
+# project (pinned in .python-version), so the system version doesn't matter.
+python --version
+if ($LASTEXITCODE -ne 0) { throw "Python not found. Install it from python.org." }
 
 # uv = fast Python package manager. Use it as "python -m uv" so PATH doesn't matter.
 $hasUv = $true
@@ -19,7 +18,7 @@ if (-not $hasUv) {
 }
 
 Write-Host "== 2/4 Installing Python packages ==" -ForegroundColor Cyan
-python -m uv sync
+python -m uv sync --python 3.12
 
 Write-Host "== 3/4 Downloading llama.cpp (Vulkan build, runs the LLM on the Intel Arc GPU) ==" -ForegroundColor Cyan
 $llamaDir = "tools\llama.cpp"

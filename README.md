@@ -24,7 +24,7 @@ Browser mic ──WebRTC──► Silero VAD + Smart-Turn ─► Parakeet STT �
 
 ## 1. Set up on Windows (once)
 
-You need Python 3.11–3.13 and an up-to-date Intel Arc graphics driver.
+You need Python (any recent version: setup downloads its own Python 3.12 for the project) and an up-to-date Intel Arc graphics driver.
 
 ```powershell
 git clone https://github.com/fatiiiiima/voice-chat-wazir.git
