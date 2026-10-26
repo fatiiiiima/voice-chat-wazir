@@ -48,7 +48,9 @@ async def one_request(client: httpx.AsyncClient, url: str, model: str, question:
     chunks = 0
     text = ""
     async with client.stream("POST", f"{url}/chat/completions", json=body) as r:
-        r.raise_for_status()
+        if r.status_code != 200:
+            detail = (await r.aread()).decode(errors="replace")[:500]
+            raise SystemExit(f"LLM server returned {r.status_code} for {url}/chat/completions:\n{detail}")
         async for line in r.aiter_lines():
             if not line.startswith("data: ") or line.endswith("[DONE]"):
                 continue
@@ -62,6 +64,19 @@ async def one_request(client: httpx.AsyncClient, url: str, model: str, question:
     return {"ttft_ms": (first - t0) * 1000 if first else None, "tok_s": decode_tps, "text": text.strip()}
 
 
+async def check_server(client: httpx.AsyncClient, url: str):
+    try:
+        r = await client.get(f"{url}/models")
+    except httpx.ConnectError:
+        raise SystemExit(f"Nothing is listening at {url}. Start scripts\\start_llm.ps1 first.")
+    print(f"GET {url}/models -> {r.status_code}: {r.text[:300]}\n")
+    if r.status_code != 200:
+        raise SystemExit(
+            "That doesn't look like llama.cpp. Another program may be using port 8080 -\n"
+            "run:  netstat -ano | findstr :8080   then   tasklist /FI \"PID eq <pid>\""
+        )
+
+
 async def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default=settings.llm_base_url)
@@ -69,6 +84,7 @@ async def main():
     args = ap.parse_args()
 
     async with httpx.AsyncClient(timeout=120) as client:
+        await check_server(client, args.url)
         cold = await one_request(client, args.url, args.model, QUESTIONS[0])
         print(f"cold (first request, prompt not cached): TTFT {cold['ttft_ms']:.0f} ms")
         print(f"  reply: {cold['text']!r}\n")
